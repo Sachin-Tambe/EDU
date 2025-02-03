@@ -1,8 +1,9 @@
 streamlit
-python-dotenv
+langchain==0.16.0
+faiss-cpu
 google-generativeai
 PyPDF2
-langchain
 langchain-google-genai
-youtube-transcript-api
+langchain-vectorstores
 fpdf
+youtube-transcript-api
