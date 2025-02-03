@@ -7,3 +7,5 @@ langchain-google-genai
 faiss-cpu
 youtube-transcript-api
 fpdf
+langchain-community
+
