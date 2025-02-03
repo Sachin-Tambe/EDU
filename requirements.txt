@@ -1,5 +1,5 @@
 streamlit
-langchain==0.16.0
+langchain
 faiss-cpu
 google-generativeai
 PyPDF2
