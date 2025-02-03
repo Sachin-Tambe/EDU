@@ -40,8 +40,8 @@ def get_vector_store(text_chunks):
 
 def get_conversational_chain():
     prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, 
-    if the answer is not in provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
+    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
+    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
     Context:\n {context}?\n
     Question: \n{question}\n
     Answer:
@@ -129,27 +129,23 @@ def main():
             st.image(f"http://img.youtube.com/vi/{video_id}/0.jpg", use_column_width=True)
 
         if st.button("Get Detailed Notes"):
-            try:
-                transcript_text = extract_transcript_details(youtube_link)
+            transcript_text = extract_transcript_details(youtube_link)
 
-                if transcript_text:
-                    summary = generate_gemini_content(transcript_text, prompt)
-                    st.markdown("## Detailed Notes:")
-                    st.write(summary)
+            if transcript_text:
+                summary = generate_gemini_content(transcript_text, prompt)
+                st.markdown("## Detailed Notes:")
+                st.write(summary)
 
-                    # Chat functionality to ask questions about the video
-                    user_question = st.text_input("Ask a question about the video:")
-                    if user_question:
-                        response = generate_gemini_content(transcript_text + "\n" + user_question, prompt)
-                        st.write("Answer: ", response)
+                # Chat functionality to ask questions about the video
+                user_question = st.text_input("Ask a question about the video:")
+                if user_question:
+                    response = generate_gemini_content(transcript_text + "\n" + user_question, prompt)
+                    st.write("Answer: ", response)
 
-                    # Provide an option to download the summary as a PDF
-                    if st.button("Download Summary as PDF"):
-                        pdf_file = generate_pdf(summary)
-                        st.download_button("Download PDF", pdf_file)
-
-            except Exception as e:
-                st.error(f"Error extracting transcript: {e}")
+                # Provide an option to download the summary as a PDF
+                if st.button("Download Summary as PDF"):
+                    pdf_file = generate_pdf(summary)
+                    st.download_button("Download PDF", pdf_file)
 
 if __name__ == "__main__":
     main()
