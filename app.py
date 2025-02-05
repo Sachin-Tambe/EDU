@@ -13,12 +13,14 @@ from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from youtube_transcript_api import YouTubeTranscriptApi
 from fpdf import FPDF
+import requests
+from io import BytesIO
 
 # Load environment variables
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# PDF Chat Functionality
+# PDF Generation and Chat with PDF Functionality
 
 def get_pdf_text(pdf_docs):
     text = ""
@@ -84,15 +86,42 @@ def generate_gemini_content(transcript_text, prompt):
     response = model.generate_content(prompt + transcript_text)
     return response.text
 
-def generate_pdf(content):
+def generate_pdf(content, youtube_link):
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
+
+    # Add Title Section
+    pdf.set_font("Arial", style='B', size=16)
+    pdf.cell(200, 10, txt="YouTube Video Summary", ln=True, align='C')
+
+    # Add Thumbnail Image
+    video_id = youtube_link.split("=")[1]
+    image_url = f"http://img.youtube.com/vi/{video_id}/0.jpg"
+
+    try:
+        # Fetch the thumbnail image
+        response = requests.get(image_url)
+        img = BytesIO(response.content)
+        pdf.image(img, x=10, y=30, w=180)  # Adjusting the image position and size
+    except Exception as e:
+        # If error occurs while fetching the image
+        print(f"Error fetching thumbnail: {e}")
+        pdf.set_font("Arial", size=12)
+        pdf.ln(20)  # Space before error message
+        pdf.cell(200, 10, txt="Error fetching video thumbnail.", ln=True, align='C')
+
+    # Add Summary Content
+    pdf.ln(90)  # Adding space after the image for content
     pdf.set_font("Arial", size=12)
     pdf.multi_cell(0, 10, content)
-    pdf_output = "summarized_content.pdf"
-    pdf.output(pdf_output)
-    return pdf_output
+
+    # Save the PDF locally
+    pdf_output_path = os.path.join(os.getcwd(), "summarized_content.pdf")
+    pdf.output(pdf_output_path)
+
+    return pdf_output_path
+
 
 # Main Functionality
 
@@ -100,7 +129,6 @@ def main():
     st.set_page_config(page_title="Select Your Functionality")
     st.header("Choose Your Tool")
 
-    # Functionality Selection
     functionality = st.radio("Choose Functionality", ("ChatPDF", "YouTube Summarizer"))
 
     if functionality == "ChatPDF":
@@ -129,23 +157,25 @@ def main():
             st.image(f"http://img.youtube.com/vi/{video_id}/0.jpg", use_column_width=True)
 
         if st.button("Get Detailed Notes"):
-            transcript_text = extract_transcript_details(youtube_link)
-
-            if transcript_text:
+            if 'transcript_text' not in st.session_state:
+                transcript_text = extract_transcript_details(youtube_link)
+                st.session_state.transcript_text = transcript_text
                 summary = generate_gemini_content(transcript_text, prompt)
-                st.markdown("## Detailed Notes:")
+                st.session_state.summary = summary
                 st.write(summary)
+            else:
+                st.write(st.session_state.summary)
 
-                # Chat functionality to ask questions about the video
-                user_question = st.text_input("Ask a question about the video:")
-                if user_question:
-                    response = generate_gemini_content(transcript_text + "\n" + user_question, prompt)
-                    st.write("Answer: ", response)
+        user_question = st.text_input("Ask a question about the video:")
 
-                # Provide an option to download the summary as a PDF
-                if st.button("Download Summary as PDF"):
-                    pdf_file = generate_pdf(summary)
-                    st.download_button("Download PDF", pdf_file)
+        if user_question:
+            response = generate_gemini_content(st.session_state.transcript_text + "\n" + user_question, prompt)
+            st.write("Answer: ", response)
+
+        if st.button("Download Summary as PDF"):
+            if 'summary' in st.session_state:
+                pdf_file = generate_pdf(st.session_state.summary, youtube_link)
+                st.download_button("Download PDF", pdf_file, file_name="summarized_content.pdf")
 
 if __name__ == "__main__":
     main()
