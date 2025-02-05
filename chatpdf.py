@@ -61,7 +61,7 @@ def user_input(user_question):
 # Streamlit UI
 def main():
     st.set_page_config(page_title="Chat with PDF")
-    st.title("Chat with PDF using Gemini 💬📄")
+    st.title("Chat with PDF  💬📄")
 
     with st.sidebar:
         st.header("Upload PDF Files")
