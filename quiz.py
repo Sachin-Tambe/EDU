@@ -23,7 +23,8 @@ Each question should have 4 options and 1 correct answer. Format:
 """
 
 def generate_quiz(topic, num_questions):
-    model = genai.GenerativeModel("gemini-pro")
+    # Updated to use "gemini-1.5-pro"
+    model = genai.GenerativeModel("gemini-1.5-pro")
     response = model.generate_content(quiz_prompt.format(topic=topic, num_questions=num_questions))
     return response.text
 
@@ -43,34 +44,31 @@ def parse_quiz_response(response):
         line = line.strip()
         if not line:
             continue
-            
-        # Detect question start (ensuring a valid split)
+        
+        # Check for a new question: expects a digit followed by a dot.
         if line[0].isdigit() and '.' in line:
             if current_question:
                 questions.append(current_question)
+            parts = line.split('. ', 1)
+            question_text = parts[1] if len(parts) > 1 else line
             current_question = {
-                'question': line.split('. ', 1)[1] if '. ' in line else line,
+                'question': question_text,
                 'options': [],
                 'answer': ''
             }
-        
-        # Detect option (ensuring the key exists)
+        # Check for an option starting with a), b), c) or d)
         elif line.lower().startswith(('a)', 'b)', 'c)', 'd)')) and current_question is not None:
-            if 'options' not in current_question:
-                current_question['options'] = []
             current_question['options'].append(line)
-        
-        # Detect answer
+        # Check for answer line; use split with maxsplit=1
         elif line.lower().startswith('answer:') and current_question is not None:
-            answer = line.split(':')[-1].strip().lower()
-            current_question['answer'] = answer[0] if answer else ''
-
-    # Append the last question if it exists
+            answer_line = line.split(':', 1)[1].strip().lower()
+            if answer_line:
+                # Clean the answer by taking only alphabetic characters.
+                current_question['answer'] = ''.join(filter(str.isalpha, answer_line))[0]
     if current_question:
         questions.append(current_question)
     
     return questions
-
 
 def quiz_app():
     st.subheader("📝 Quiz Generator")
@@ -93,7 +91,7 @@ def quiz_app():
             quiz_response = generate_quiz(topic, num_questions)
             parsed_questions = parse_quiz_response(quiz_response)
             
-            # Initialize session state
+            # Initialize session state with parsed questions and reset answers/results
             st.session_state['quiz_data'] = parsed_questions
             st.session_state['user_answers'] = {}
             st.session_state['show_results'] = False
@@ -102,25 +100,42 @@ def quiz_app():
         for idx, question_data in enumerate(st.session_state['quiz_data']):
             st.write(f"**Q{idx + 1}: {question_data['question']}**")
             
-            # Extract option text and letters separately
-            options = [opt.split(') ', 1)[1] for opt in question_data['options']]
-            option_letters = [opt[0].lower() for opt in question_data['options']]
+            # Process options: assume format "a) Option text"
+            options = []
+            option_letters = []
+            for opt in question_data['options']:
+                if ') ' in opt:
+                    letter, text = opt.split(') ', 1)
+                    options.append(text)
+                    option_letters.append(letter.strip().lower())
+                else:
+                    options.append(opt)
+                    option_letters.append('')
             
-            # Get user's previous answer if exists
+            # Insert a default placeholder at the beginning
+            new_options = ["Select an answer"] + options
+            
+            # Retrieve any previously selected answer; if exists, set default index accordingly
             previous_answer = st.session_state['user_answers'].get(idx, None)
+            if previous_answer and previous_answer in option_letters:
+                # Find the index in options corresponding to the previous answer and add 1 for placeholder
+                default_index = options.index(options[option_letters.index(previous_answer)]) + 1
+            else:
+                default_index = 0  # default to placeholder
             
-            user_answer = st.radio(
+            user_answer_text = st.radio(
                 f"Choose your answer for Q{idx + 1}:",
-                options=options,
-                index=option_letters.index(previous_answer) if previous_answer in option_letters else None,
-                key=f"q{idx}",
-                format_func=lambda x: x
+                options=new_options,
+                index=default_index,
+                key=f"q{idx}"
             )
             
-            # Store the letter answer
-            if user_answer:
-                selected_index = options.index(user_answer)
-                st.session_state['user_answers'][idx] = option_letters[selected_index]
+            # Map the user's selected text back to its corresponding option letter, if an option is chosen
+            if user_answer_text != "Select an answer":
+                selected_index = options.index(user_answer_text)
+                st.session_state['user_answers'][idx] = option_letters[selected_index].lower().strip()
+            else:
+                st.session_state['user_answers'][idx] = None
 
         if st.button("Submit Answers"):
             st.session_state['show_results'] = True
@@ -130,17 +145,23 @@ def quiz_app():
             results = []
             
             for idx, question_data in enumerate(st.session_state['quiz_data']):
-                user_answer = st.session_state['user_answers'].get(idx, 'No answer')
-                correct_answer = question_data['answer'].lower()
-                is_correct = user_answer == correct_answer
+                user_ans_letter = st.session_state['user_answers'].get(idx)
+                # If no answer was selected, treat as "No answer"
+                if user_ans_letter is None:
+                    user_ans_letter = "No answer"
+                else:
+                    user_ans_letter = user_ans_letter.lower().strip()
+                # Clean correct answer to contain only alphabets
+                correct_ans_letter = ''.join(filter(str.isalpha, question_data['answer'])).lower().strip()
+                is_correct = (user_ans_letter == correct_ans_letter)
                 
                 if is_correct:
                     correct_count += 1
                 
                 results.append({
                     'question': question_data['question'],
-                    'user_answer': user_answer.upper() if user_answer != 'No answer' else user_answer,
-                    'correct_answer': correct_answer.upper(),
+                    'user_answer': user_ans_letter.upper() if user_ans_letter != "No answer" else user_ans_letter,
+                    'correct_answer': correct_ans_letter.upper(),
                     'is_correct': is_correct
                 })
             
@@ -153,7 +174,7 @@ def quiz_app():
             
             # Pie Chart
             labels = ['Correct', 'Incorrect']
-            sizes = [correct_count, len(results)-correct_count]
+            sizes = [correct_count, len(results) - correct_count]
             colors = ['#4CAF50', '#F44336']
             ax1.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
             ax1.set_title('Score Distribution')

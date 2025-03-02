@@ -14,7 +14,7 @@ prompt = """You are a learning path generator. Given a topic, generate a structu
 Topic: """
 
 def generate_learning_path(topic):
-    model = genai.GenerativeModel("gemini-pro")
+    model = genai.GenerativeModel("gemini-1.5-pro")
     response = model.generate_content(prompt + topic)
     return response.text
 
