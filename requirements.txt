@@ -11,3 +11,4 @@ langchain
 faiss-cpu
 langchain-google-genai
 langchain-community
+langdetect
