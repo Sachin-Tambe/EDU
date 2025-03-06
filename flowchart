@@ -1,0 +1,19 @@
+// AI-powered Resume Screening System
+digraph {
+	A [label="User Input"]
+	B [label="Streamlit Web Interface"]
+	C [label="PDF Extraction & Preprocessing Module"]
+	D [label="NLP Processing (spaCy)"]
+	E [label="Feature Extraction (TF-IDF & Cosine Similarity)"]
+	F [label="Generative AI Module (Gemini-1.5 Pro)"]
+	G [label="Ranking Engine"]
+	H [label="Results Display"]
+	A -> B
+	B -> C
+	C -> D
+	D -> E
+	B -> F
+	E -> G
+	F -> G
+	G -> H
+}
