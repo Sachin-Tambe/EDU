@@ -12,3 +12,4 @@ faiss-cpu
 langchain-google-genai
 langchain-community
 langdetect
+whisper
