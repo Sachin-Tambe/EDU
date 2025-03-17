@@ -1,181 +1,206 @@
 import streamlit as st
-from dotenv import load_dotenv
-import os
-import langchain
-import langchain_community
-import google.generativeai as genai
-from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain.vectorstores import FAISS
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains.question_answering import load_qa_chain
-from langchain.prompts import PromptTemplate
-from youtube_transcript_api import YouTubeTranscriptApi
-from fpdf import FPDF
-import requests
-from io import BytesIO
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-# Load environment variables
-load_dotenv()
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+from sklearn.model_selection import train_test_split
+from sklearn.utils import resample
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.preprocessing import StandardScaler
 
-# PDF Generation and Chat with PDF Functionality
+# Define the categorical columns and their mapping
+CATEGORICAL_COLS = {
+    'Gender': {'options': ["Female", "Male"], 'map': {"Female": 0, "Male": 1}},
+    'Smoking/Alcohol Consumption Status': {'options': ["No", "Yes"], 'map': {"No": 0, "Yes": 1}},
+    'Family History of Disease': {'options': ["No", "Yes"], 'map': {"No": 0, "Yes": 1}}
+}
 
-def get_pdf_text(pdf_docs):
-    text = ""
-    for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
-        for page in pdf_reader.pages:
-            text += page.extract_text()
-    return text
+# ---------------------------
+# Helper Functions
+# ---------------------------
+@st.cache_data
+def load_and_preprocess_data():
+    # Load dataset
+    df = pd.read_csv('heart_disease_prediction.csv')
+    
+    # Fill missing numerical values with median
+    num_cols = ['Age', 'Blood Pressure', 'Cholesterol Levels', 'Glucose Levels', 'BMI']
+    for col in num_cols:
+        df[col] = df[col].fillna(df[col].median())
+    
+    # Fill missing target variable if necessary
+    if df["Target Variable"].isnull().any():
+        df["Target Variable"] = df["Target Variable"].fillna(df["Target Variable"].first_valid_index())
+    
+    # Process categorical columns.
+    for col in CATEGORICAL_COLS.keys():
+        df[col] = df[col].fillna(method='ffill')
+        # If the column is not numeric, convert common text values to 0/1.
+        if df[col].dtype == object:
+            df[col] = df[col].map(CATEGORICAL_COLS[col]['map'])
+    
+    return df
 
-def get_text_chunks(text):
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
-    chunks = text_splitter.split_text(text)
-    return chunks
+@st.cache_resource
+def train_models(df):
+    # Separate features and target
+    X = df.drop(columns=['Target Variable'])
+    y = df['Target Variable']
+    
+    # Balance the dataset via random under-sampling (if necessary)
+    df_balanced = pd.concat([X, y], axis=1)
+    majority_class = df_balanced[df_balanced['Target Variable'] == 0]
+    minority_class = df_balanced[df_balanced['Target Variable'] == 1]
+    
+    if len(minority_class) > 0 and len(majority_class) > len(minority_class):
+        majority_downsampled = resample(majority_class,
+                                        replace=False,
+                                        n_samples=len(minority_class),
+                                        random_state=42)
+        df_resampled = pd.concat([majority_downsampled, minority_class])
+    else:
+        df_resampled = df_balanced.copy()
+    
+    X_resampled = df_resampled.drop(columns=['Target Variable'])
+    y_resampled = df_resampled['Target Variable']
+    
+    # Standardize features
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_resampled)
+    X_scaled = pd.DataFrame(X_scaled, columns=X_resampled.columns)
+    
+    # Split into training and test sets
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_resampled, test_size=0.2, random_state=42)
+    
+    # Train Logistic Regression model
+    log_model = LogisticRegression()
+    log_model.fit(X_train, y_train)
+    y_pred_log = log_model.predict(X_test)
+    log_accuracy = accuracy_score(y_test, y_pred_log)
+    log_conf_matrix = confusion_matrix(y_test, y_pred_log)
+    
+    # Train Random Forest model
+    rf_model = RandomForestClassifier(n_estimators=100, random_state=42, class_weight='balanced')
+    rf_model.fit(X_train, y_train)
+    y_pred_rf = rf_model.predict(X_test)
+    rf_accuracy = accuracy_score(y_test, y_pred_rf)
+    rf_conf_matrix = confusion_matrix(y_test, y_pred_rf)
+    
+    models = {
+        'scaler': scaler,
+        'logistic': log_model,
+        'rf': rf_model,
+        'log_accuracy': log_accuracy,
+        'log_conf_matrix': log_conf_matrix,
+        'rf_accuracy': rf_accuracy,
+        'rf_conf_matrix': rf_conf_matrix,
+        'features': X_resampled.columns
+    }
+    return models
 
-def get_vector_store(text_chunks):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+# ---------------------------
+# Main App
+# ---------------------------
+st.title("Heart Disease Prediction App")
 
-def get_conversational_chain():
-    prompt_template = """
-    Answer the question as detailed as possible from the provided context, make sure to provide all the details, if the answer is not in
-    provided context just say, "answer is not available in the context", don't provide the wrong answer\n\n
-    Context:\n {context}?\n
-    Question: \n{question}\n
-    Answer:
-    """
-    model = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0.3)
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-    chain = load_qa_chain(model, chain_type="stuff", prompt=prompt)
-    return chain
+# Sidebar for navigation
+page = st.sidebar.selectbox("Navigation", ["Exploratory Data Analysis", "Logistic Regression Prediction", "Random Forest Prediction"])
 
-def user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
+# Load and preprocess data
+df = load_and_preprocess_data()
+st.write("### Data Preview")
+st.dataframe(df.head())
 
-    chain = get_conversational_chain()
-    response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
-
-    st.write("Reply: ", response["output_text"])
-
-# YouTube Summarizer Functionality
-
-prompt = """You are a YouTube video summarizer. You will be taking the transcript text
-and summarizing the entire video and providing the important summary in points
-within 250 words. Please provide the summary of the text given here: """
-
-def extract_transcript_details(youtube_video_url):
-    try:
-        video_id = youtube_video_url.split("=")[1]
-        transcript_text = YouTubeTranscriptApi.get_transcript(video_id)
-
-        transcript = ""
-        for i in transcript_text:
-            transcript += " " + i["text"]
-        return transcript
-    except Exception as e:
-        raise e
-
-def generate_gemini_content(transcript_text, prompt):
-    model = genai.GenerativeModel("gemini-pro")
-    response = model.generate_content(prompt + transcript_text)
-    return response.text
-
-def generate_pdf(content, youtube_link):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
-
-    # Add Title Section
-    pdf.set_font("Arial", style='B', size=16)
-    pdf.cell(200, 10, txt="YouTube Video Summary", ln=True, align='C')
-
-    # Add Thumbnail Image
-    video_id = youtube_link.split("=")[1]
-    image_url = f"http://img.youtube.com/vi/{video_id}/0.jpg"
-
-    try:
-        # Fetch the thumbnail image
-        response = requests.get(image_url)
-        img = BytesIO(response.content)
-        pdf.image(img, x=10, y=30, w=180)  # Adjusting the image position and size
-    except Exception as e:
-        # If error occurs while fetching the image
-        print(f"Error fetching thumbnail: {e}")
-        pdf.set_font("Arial", size=12)
-        pdf.ln(20)  # Space before error message
-        pdf.cell(200, 10, txt="Error fetching video thumbnail.", ln=True, align='C')
-
-    # Add Summary Content
-    pdf.ln(90)  # Adding space after the image for content
-    pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, content)
-
-    # Save the PDF locally
-    pdf_output_path = os.path.join(os.getcwd(), "summarized_content.pdf")
-    pdf.output(pdf_output_path)
-
-    return pdf_output_path
-
-
-# Main Functionality
-
-def main():
-    st.set_page_config(page_title="Select Your Functionality")
-    st.header("Choose Your Tool")
-
-    functionality = st.radio("Choose Functionality", ("ChatPDF", "YouTube Summarizer"))
-
-    if functionality == "ChatPDF":
-        st.subheader("Chat with PDF using Gemini💁")
-        user_question = st.text_input("Ask a Question from the PDF Files")
-
-        if user_question:
-            user_input(user_question)
-
-        with st.sidebar:
-            st.title("Menu:")
-            pdf_docs = st.file_uploader("Upload your PDF Files", accept_multiple_files=True)
-            if st.button("Submit & Process"):
-                with st.spinner("Processing..."):
-                    raw_text = get_pdf_text(pdf_docs)
-                    text_chunks = get_text_chunks(raw_text)
-                    get_vector_store(text_chunks)
-                    st.success("Done")
-
-    elif functionality == "YouTube Summarizer":
-        st.subheader("YouTube Video Summarizer 💻")
-        youtube_link = st.text_input("Enter YouTube Video Link:")
-
-        if youtube_link:
-            video_id = youtube_link.split("=")[1]
-            st.image(f"http://img.youtube.com/vi/{video_id}/0.jpg", use_column_width=True)
-
-        if st.button("Get Detailed Notes"):
-            if 'transcript_text' not in st.session_state:
-                transcript_text = extract_transcript_details(youtube_link)
-                st.session_state.transcript_text = transcript_text
-                summary = generate_gemini_content(transcript_text, prompt)
-                st.session_state.summary = summary
-                st.write(summary)
-            else:
-                st.write(st.session_state.summary)
-
-        user_question = st.text_input("Ask a question about the video:")
-
-        if user_question:
-            response = generate_gemini_content(st.session_state.transcript_text + "\n" + user_question, prompt)
-            st.write("Answer: ", response)
-
-        if st.button("Download Summary as PDF"):
-            if 'summary' in st.session_state:
-                pdf_file = generate_pdf(st.session_state.summary, youtube_link)
-                st.download_button("Download PDF", pdf_file, file_name="summarized_content.pdf")
-
-if __name__ == "__main__":
-    main()
+if page == "Exploratory Data Analysis":
+    st.header("Exploratory Data Analysis")
+    
+    st.subheader("Feature Visualizations")
+    plot_choice = st.selectbox("Select a feature to visualize", df.columns)
+    
+    fig, ax = plt.subplots(1, 2, figsize=(12, 4))
+    # Boxplot
+    sns.boxplot(x=df[plot_choice], ax=ax[0])
+    ax[0].set_title(f"Box Plot of {plot_choice}")
+    
+    # Histogram with KDE
+    sns.histplot(df[plot_choice], bins=30, kde=True, ax=ax[1])
+    ax[1].set_title(f"Histogram of {plot_choice}")
+    
+    st.pyplot(fig)
+    
+    st.subheader("Correlation Matrix")
+    fig2, ax2 = plt.subplots(figsize=(10, 6))
+    sns.heatmap(df.corr(), annot=True, cmap="coolwarm", fmt=".2f", ax=ax2)
+    st.pyplot(fig2)
+    
+elif page == "Logistic Regression Prediction":
+    st.header("Logistic Regression Prediction")
+    
+    # Train models if not already trained
+    models = train_models(df)
+    scaler = models['scaler']
+    log_model = models['logistic']
+    
+    st.subheader("Model Performance")
+    st.write(f"**Accuracy:** {models['log_accuracy'] * 100:.2f}%")
+    st.write("**Confusion Matrix:**")
+    st.write(models['log_conf_matrix'])
+    
+    st.subheader("Enter Patient Data")
+    input_data = {}
+    # For each feature, present a selectbox for categorical features or a number_input for numeric features.
+    for feature in models['features']:
+        if feature in CATEGORICAL_COLS:
+            # Use selectbox for categorical input
+            option = st.selectbox(f"{feature}", options=CATEGORICAL_COLS[feature]['options'])
+            # Map the option to numeric
+            input_data[feature] = CATEGORICAL_COLS[feature]['map'][option]
+        else:
+            input_data[feature] = st.number_input(f"{feature}", value=float(50))
+    
+    user_df = pd.DataFrame([input_data])
+    user_scaled = scaler.transform(user_df)
+    
+    if st.button("Predict with Logistic Regression"):
+        prediction = log_model.predict(user_scaled)[0]
+        prediction_proba = log_model.predict_proba(user_scaled)[0]
+        if prediction == 1:
+            st.error(f"High Risk of Heart Disease! (Probability: {prediction_proba[1] * 100:.2f}%)")
+        else:
+            st.success(f"Low Risk of Heart Disease (Probability: {prediction_proba[0] * 100:.2f}%)")
+    
+elif page == "Random Forest Prediction":
+    st.header("Random Forest Prediction")
+    
+    # Train models if not already trained
+    models = train_models(df)
+    scaler = models['scaler']
+    rf_model = models['rf']
+    
+    st.subheader("Model Performance")
+    st.write(f"**Accuracy:** {models['rf_accuracy'] * 100:.2f}%")
+    st.write("**Confusion Matrix:**")
+    st.write(models['rf_conf_matrix'])
+    
+    st.subheader("Enter Patient Data")
+    input_data = {}
+    for feature in models['features']:
+        if feature in CATEGORICAL_COLS:
+            option = st.selectbox(f"{feature}", options=CATEGORICAL_COLS[feature]['options'])
+            input_data[feature] = CATEGORICAL_COLS[feature]['map'][option]
+        else:
+            input_data[feature] = st.number_input(f"{feature}", value=float(50))
+    
+    user_df = pd.DataFrame([input_data])
+    user_scaled = scaler.transform(user_df)
+    
+    if st.button("Predict with Random Forest"):
+        prediction = rf_model.predict(user_scaled)[0]
+        prediction_proba = rf_model.predict_proba(user_scaled)[0]
+        if prediction == 1:
+            st.error(f"High Risk of Heart Disease! (Probability: {prediction_proba[1] * 100:.2f}%)")
+        else:
+            st.success(f"Low Risk of Heart Disease (Probability: {prediction_proba[0] * 100:.2f}%)")
